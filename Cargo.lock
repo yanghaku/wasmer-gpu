@@ -567,6 +567,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cuda-runtime-sys"
+version = "0.3.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d070b301187fee3c611e75a425cf12247b7c75c09729dbdef95cb9cb64e8c39"
+dependencies = [
+ "cuda-config",
+]
+
+[[package]]
 name = "darling"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2578,6 +2587,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "cuda-driver-sys",
+ "cuda-runtime-sys",
  "generational-arena",
  "getrandom",
  "libc",

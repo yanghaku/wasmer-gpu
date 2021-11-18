@@ -1,0 +1,31 @@
+[package]
+name = "wasmer-wasi"
+version = "2.0.0"
+description = "WASI implementation library for Wasmer WebAssembly runtime"
+categories = ["wasm", "os"]
+keywords = ["wasm", "webassembly", "wasi", "sandbox", "ABI"]
+authors = ["Wasmer Engineering Team <engineering@wasmer.io>"]
+repository = "https://github.com/wasmerio/wasmer"
+license = "MIT"
+readme = "README.md"
+edition = "2018"
+
+[dependencies]
+bincode = "1"
+thiserror = "1"
+generational-arena = { version = "0.2", features = ["serde"] }
+libc = { version = "^0.2", default-features = false }
+tracing = { version = "0.1" }
+getrandom = "0.2"
+typetag = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+wasmer-wasi-types = { path = "../wasi-types", version = "2.0.0" }
+wasmer = { path = "../api", version = "2.0.0", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+winapi = "0.3"
+
+[features]
+default = ["logging"]
+logging = ["tracing/log"]
+disable-all-logging = ["tracing/release_max_level_off", "tracing/max_level_off"]

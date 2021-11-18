@@ -645,6 +645,8 @@ typedef enum wasmer_parser_operator_t {
   I32x4TruncSatF64x2UZero,
 } wasmer_parser_operator_t;
 
+typedef struct cuda_env_t cuda_env_t;
+
 #if defined(WASMER_WASI_ENABLED)
 typedef struct wasi_config_t wasi_config_t;
 #endif
@@ -681,6 +683,25 @@ typedef uint64_t (*wasmer_metering_cost_function_t)(enum wasmer_parser_operator_
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+void cuda_env_delete(struct cuda_env_t *_x);
+
+struct cuda_env_t *cuda_env_new(void);
+
+bool cuda_get_imports(const wasm_store_t *store,
+                      const wasm_module_t *module,
+                      const struct cuda_env_t *cuda_env,
+                      wasm_extern_vec_t *imports);
+
+bool cuda_get_unordered_imports(const wasm_store_t *store,
+                                const struct cuda_env_t *cuda_env,
+                                struct wasmer_named_extern_vec_t *unordered_imports);
+
+bool cuda_wasi_get_imports(const wasm_store_t *store,
+                           const wasm_module_t *module,
+                           const struct cuda_env_t *cuda_env,
+                           const struct wasi_env_t *wasi_env,
+                           wasm_extern_vec_t *imports);
 
 #if defined(WASMER_WASI_ENABLED)
 void wasi_config_arg(struct wasi_config_t *config, const char *arg);

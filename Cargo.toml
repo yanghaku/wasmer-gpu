@@ -26,6 +26,7 @@ wasmer-cache = { version = "2.0.0", path = "lib/cache", optional = true }
 wasmer-types = { version = "2.0.0", path = "lib/types" }
 wasmer-middlewares = { version = "2.0.0", path = "lib/middlewares", optional = true }
 cfg-if = "1.0"
+wasmer-cuda = { version = "0.1.0", path = "lib/wasmer-cuda", optional = true }
 
 [workspace]
 members = [
@@ -53,6 +54,7 @@ members = [
     "tests/lib/compiler-test-derive",
     "tests/integration/cli",
     "fuzz",
+    "lib/wasmer-cuda",
 ]
 
 [build-dependencies]

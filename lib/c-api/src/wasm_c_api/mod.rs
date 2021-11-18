@@ -319,3 +319,187 @@ pub mod wasi;
 /// ```
 #[cfg(feature = "wat")]
 pub mod wat;
+
+/// Wasmer-specific API to use CUDA driver interface to support GPU
+///
+/// # Example
+///
+/// ```c
+/// #include <stdio.h>
+/// #include <string.h>
+/// #include <malloc.h>
+/// #include "wasmer.h"
+///
+/// #define ERROR 0
+/// #define OK 1
+/// #define own
+/// #define WASMER_WASI_ENABLED
+///
+/// static const char *wasm_path = "/home/yb/code/wasmer/lib/wasmer-cuda/tests/test_bin/";
+///
+///
+/// // Assert that a `wasm_name_t` equals something.
+/// void wasmer_assert_name(const wasm_name_t *name, const char *expected) {
+///   assert(name->size == strlen(expected) &&
+///          strncmp(name->data, expected, name->size) == 0);
+/// }
+///
+/// // Use the last_error API to retrieve error messages
+/// void print_wasmer_error()
+/// {
+///     int error_len = wasmer_last_error_length();
+///     printf("Error len: `%d`\n", error_len);
+///     char *error_str = malloc(error_len);
+///     wasmer_last_error_message(error_str, error_len);
+///     printf("Error str: `%s`\n", error_str);
+/// }
+///
+/// int load_binary(wasm_byte_vec_t *binary, const char *file_name) {
+///     FILE *file = fopen(file_name, "rb");
+///     if (!file) {
+///         printf("> file open error: %s\n", file_name);
+///         return ERROR;
+///     }
+///     fseek(file, 0L, SEEK_END);
+///     size_t file_size = ftell(file);
+///     fseek(file, 0L, SEEK_SET);
+///
+///     wasm_byte_vec_new_uninitialized(binary, file_size);
+///     if (fread(binary->data, file_size, 1, file) != 1) {
+///         printf("file read binary error!\n");
+///         return ERROR;
+///     }
+///     fclose(file);
+///     return OK;
+/// }
+///
+///
+/// int run(const char *wasm_name, const char *run_arg) {
+///     printf("\n\n\n--------------------------test %s------------------\n\n", wasm_name);
+///     char *wasm_file = (char *) malloc(100);
+///     strcat(strcpy(wasm_file, wasm_path), wasm_name);
+///
+///     // load binary
+///     wasm_byte_vec_t binary;
+///     if (load_binary(&binary, wasm_file) != OK) {
+///         printf("load binary fail\n");
+///         return ERROR;
+///     }
+///
+///     free(wasm_file);
+///
+///     // Initialize.
+///     wasm_engine_t *engine = wasm_engine_new();
+///     wasm_store_t *store = wasm_store_new(engine);
+///
+///     // compile module
+///     own wasm_module_t *module = wasm_module_new(store, &binary);
+///     if ( !module ) {
+///         printf("compile module error!\n");
+///         return ERROR;
+///     }
+///
+///     wasm_byte_vec_delete(&binary);
+///
+///     // init wasi_config
+///     wasi_config_t *wasi_config = wasi_config_new(wasm_name);
+///     wasi_config_arg(wasi_config, run_arg);
+///
+///     // init wasi_env
+///     wasi_env_t *wasi_env = wasi_env_new(wasi_config);
+///     if (!wasi_env) {
+///         printf("build wasi env error!\n");
+///         print_wasmer_error();
+///         return ERROR;
+///     }
+///
+///     // init cuda_env
+///     cuda_env_t *cuda_env = cuda_env_new();
+///     if (!cuda_env) {
+///         printf("build cuda env error\n");
+///         print_wasmer_error();
+///         return ERROR;
+///     }
+///
+///     // get imports size
+///     wasm_importtype_vec_t import_types;
+///     wasm_module_imports(module, &import_types);
+///
+///     // alloc memory for imports
+///     wasm_extern_vec_t imports;
+///     wasm_extern_vec_new_uninitialized(&imports, import_types.size+1000);
+///     wasm_importtype_vec_delete(&import_types);
+///
+///     // init imports
+///     bool get_import_result = cuda_wasi_get_imports(store, module, cuda_env, wasi_env, &imports);
+///     if (!get_import_result) {
+///         printf("get wasi imports error\n");
+///         print_wasmer_error();
+///         return ERROR;
+///     }
+///
+///     // instantiate
+///     wasm_instance_t *instance = wasm_instance_new(store, module, &imports, NULL);
+///     if (!instance) {
+///         printf("instantiating module\n");
+///         print_wasmer_error();
+///         return ERROR;
+///     }
+///
+///     // extract export
+///     own wasm_extern_vec_t exports;
+///     wasm_instance_exports(instance, &exports);
+///     if (exports.size == 0) {
+///         printf("access exports error\n");
+///         return 1;
+///     }
+///
+///     // get func from export
+///     wasm_func_t *run_func = wasi_get_start_function(instance);
+///     if (run_func == NULL) {
+///         printf("extract start from exports error\n");
+///         print_wasmer_error();
+///         return 1;
+///     }
+///
+///     wasm_module_delete(module);
+///     wasm_instance_delete(instance);
+///
+///     // call
+///     wasm_val_vec_t args = WASM_EMPTY_VEC;
+///     wasm_val_vec_t res = WASM_EMPTY_VEC;
+///
+///     if (wasm_func_call(run_func, &args, &res)) {
+///         printf("call function error\n");
+///         return ERROR;
+///     }
+///
+///     wasm_extern_vec_delete(&exports);
+///     wasm_extern_vec_delete(&imports);
+///
+///     wasm_func_delete(run_func);
+///     wasi_env_delete(wasi_env);
+///     cuda_env_delete(cuda_env);
+///     wasm_store_delete(store);
+///     wasm_engine_delete(engine);
+///
+///     return OK;
+/// }
+///
+/// int main(int argc, const char *argv[]) {
+///     if (run("device.wasm","") != OK) {
+///         printf("test device.wasm fail\n");
+///     }
+///     if (run("mem.wasm", "") != OK) {
+///         printf("test mem.wasm fail\n");
+///     }
+///     if (run("sumArray.wasm", "") != OK) {
+///         printf("test sumArray.wasm fail\n");
+///     }
+///     if (run("matrixMulCuda.wasm", "1024") != OK) {
+///         printf("test matrixMulCuda.wasm fail\n");
+///     }
+///     return 0;
+/// }
+/// ```
+pub mod cuda;

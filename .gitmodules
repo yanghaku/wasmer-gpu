@@ -1,0 +1,3 @@
+[submodule "lib/wasmer-cuda"]
+	path = lib/wasmer-cuda
+	url = http://210.28.132.171/yangbo/wasmer-cuda

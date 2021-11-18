@@ -549,6 +549,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cuda-config"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ee74643f7430213a1a78320f88649de309b20b80818325575e393f848f79f5d"
+dependencies = [
+ "glob",
+]
+
+[[package]]
+name = "cuda-driver-sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d4c552cc0de854877d80bcd1f11db75d42be32962d72a6799b88dcca88fffbd"
+dependencies = [
+ "cuda-config",
+]
+
+[[package]]
 name = "darling"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2413,6 +2431,7 @@ dependencies = [
  "wasmer-compiler-cranelift",
  "wasmer-compiler-llvm",
  "wasmer-compiler-singlepass",
+ "wasmer-cuda",
  "wasmer-emscripten",
  "wasmer-engine",
  "wasmer-engine-dylib",
@@ -2550,6 +2569,38 @@ dependencies = [
  "wasmer-compiler",
  "wasmer-types",
  "wasmer-vm",
+]
+
+[[package]]
+name = "wasmer-cuda"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "cuda-driver-sys",
+ "generational-arena",
+ "getrandom",
+ "libc",
+ "structopt",
+ "thiserror",
+ "tracing",
+ "typetag",
+ "wasmer",
+ "wasmer-compiler",
+ "wasmer-compiler-cranelift",
+ "wasmer-compiler-llvm",
+ "wasmer-compiler-singlepass",
+ "wasmer-emscripten",
+ "wasmer-engine",
+ "wasmer-engine-dylib",
+ "wasmer-engine-staticlib",
+ "wasmer-engine-universal",
+ "wasmer-types",
+ "wasmer-vm",
+ "wasmer-wasi",
+ "wasmer-wasi-experimental-io-devices",
+ "wasmer-wasi-types",
+ "wasmer-wast",
 ]
 
 [[package]]
@@ -2800,6 +2851,7 @@ dependencies = [
  "wasmer-compiler-cranelift",
  "wasmer-compiler-llvm",
  "wasmer-compiler-singlepass",
+ "wasmer-cuda",
  "wasmer-emscripten",
  "wasmer-engine",
  "wasmer-engine-dummy",

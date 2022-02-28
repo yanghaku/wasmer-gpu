@@ -81,9 +81,10 @@ pub struct VMFunctionImport {
 #[cfg(test)]
 mod test_vmfunction_import {
     use super::VMFunctionImport;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmfunction_import_offsets() {
@@ -143,9 +144,10 @@ impl<T: Sized + Clone + Send + Sync> Clone for VMDynamicFunctionContext<T> {
 #[cfg(test)]
 mod test_vmdynamicfunction_import_context {
     use super::VMDynamicFunctionContext;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmdynamicfunction_import_context_offsets() {
@@ -219,9 +221,10 @@ pub struct VMTableImport {
 #[cfg(test)]
 mod test_vmtable_import {
     use super::VMTableImport;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmtable_import_offsets() {
@@ -257,9 +260,10 @@ pub struct VMMemoryImport {
 #[cfg(test)]
 mod test_vmmemory_import {
     use super::VMMemoryImport;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmmemory_import_offsets() {
@@ -307,9 +311,10 @@ unsafe impl Sync for VMGlobalImport {}
 #[cfg(test)]
 mod test_vmglobal_import {
     use super::VMGlobalImport;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmglobal_import_offsets() {
@@ -340,7 +345,7 @@ pub struct VMMemoryDefinition {
     pub base: *mut u8,
 
     /// The current logical size of this linear memory in bytes.
-    pub current_length: u32,
+    pub current_length: usize,
 }
 
 /// # Safety
@@ -357,7 +362,7 @@ unsafe impl Sync for VMMemoryDefinition {}
 impl MemoryUsage for VMMemoryDefinition {
     fn size_of_val(&self, tracker: &mut dyn MemoryUsageTracker) -> usize {
         if tracker.track(self.base as *const _ as *const ()) {
-            POINTER_BYTE_SIZE * (self.current_length as usize)
+            POINTER_BYTE_SIZE * self.current_length
         } else {
             0
         }
@@ -379,10 +384,10 @@ impl VMMemoryDefinition {
         // https://webassembly.github.io/reference-types/core/exec/instructions.html#exec-memory-copy
         if src
             .checked_add(len)
-            .map_or(true, |n| n > self.current_length)
+            .map_or(true, |n| usize::try_from(n).unwrap() > self.current_length)
             || dst
                 .checked_add(len)
-                .map_or(true, |m| m > self.current_length)
+                .map_or(true, |m| usize::try_from(m).unwrap() > self.current_length)
         {
             return Err(Trap::lib(TrapCode::HeapAccessOutOfBounds));
         }
@@ -412,7 +417,7 @@ impl VMMemoryDefinition {
     pub(crate) unsafe fn memory_fill(&self, dst: u32, val: u32, len: u32) -> Result<(), Trap> {
         if dst
             .checked_add(len)
-            .map_or(true, |m| m > self.current_length)
+            .map_or(true, |m| usize::try_from(m).unwrap() > self.current_length)
         {
             return Err(Trap::lib(TrapCode::HeapAccessOutOfBounds));
         }
@@ -432,9 +437,10 @@ impl VMMemoryDefinition {
 #[cfg(test)]
 mod test_vmmemory_definition {
     use super::VMMemoryDefinition;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmmemory_definition_offsets() {
@@ -452,12 +458,6 @@ mod test_vmmemory_definition {
             offset_of!(VMMemoryDefinition, current_length),
             usize::from(offsets.vmmemory_definition_current_length())
         );
-        /* TODO: Assert that the size of `current_length` matches.
-        assert_eq!(
-            size_of::<VMMemoryDefinition::current_length>(),
-            usize::from(offsets.size_of_vmmemory_definition_current_length())
-        );
-        */
     }
 }
 
@@ -486,9 +486,10 @@ impl MemoryUsage for VMTableDefinition {
 #[cfg(test)]
 mod test_vmtable_definition {
     use super::VMTableDefinition;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmtable_definition_offsets() {
@@ -559,9 +560,10 @@ pub struct VMGlobalDefinition {
 #[cfg(test)]
 mod test_vmglobal_definition {
     use super::VMGlobalDefinition;
-    use crate::{ModuleInfo, VMFuncRef, VMOffsets};
+    use crate::{VMFuncRef, VMOffsets};
     use more_asserts::assert_ge;
     use std::mem::{align_of, size_of};
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmglobal_definition_alignment() {
@@ -796,9 +798,9 @@ pub struct VMSharedSignatureIndex(u32);
 #[cfg(test)]
 mod test_vmshared_signature_index {
     use super::VMSharedSignatureIndex;
-    use crate::module::ModuleInfo;
     use crate::vmoffsets::{TargetSharedSignatureIndex, VMOffsets};
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmshared_signature_index() {
@@ -850,9 +852,10 @@ pub struct VMCallerCheckedAnyfunc {
 #[cfg(test)]
 mod test_vmcaller_checked_anyfunc {
     use super::VMCallerCheckedAnyfunc;
-    use crate::{ModuleInfo, VMOffsets};
+    use crate::VMOffsets;
     use memoffset::offset_of;
     use std::mem::size_of;
+    use wasmer_types::ModuleInfo;
 
     #[test]
     fn check_vmcaller_checked_anyfunc_offsets() {

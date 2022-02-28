@@ -16,7 +16,7 @@
 
 use anyhow::bail;
 use std::fmt;
-use wasmer::{imports, wat2wasm, Function, Instance, Module, NativeFunc, RuntimeError, Store};
+use wasmer::{imports, wat2wasm, Function, Instance, Module, NativeFunc, Store};
 use wasmer_compiler_cranelift::Cranelift;
 use wasmer_engine_universal::Universal;
 
@@ -62,9 +62,9 @@ fn main() -> anyhow::Result<()> {
     let module = Module::new(&store, wasm_bytes)?;
 
     // We declare the host function that we'll use to terminate execution.
-    fn early_exit() {
+    fn early_exit() -> Result<(), ExitCode> {
         // This is where it happens.
-        RuntimeError::raise(Box::new(ExitCode(1)));
+        Err(ExitCode(1))
     }
 
     // Create an import object.
@@ -106,4 +106,9 @@ fn main() -> anyhow::Result<()> {
             }
         },
     }
+}
+
+#[test]
+fn test_early_exit() -> anyhow::Result<()> {
+    main()
 }

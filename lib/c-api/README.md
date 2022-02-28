@@ -20,8 +20,7 @@ $WASMER_DIR/
 Wasmer binary also ships with [`wasmer-config`](#wasmer-config)
 an utility tool that outputs config information needed to compile programs which use Wasmer.
 
-The full C API documentation can be found here:
-https://wasmerio.github.io/wasmer/c/
+[The full C API documentation can be found here](https://wasmerio.github.io/wasmer/crates/doc/wasmer_c_api/).
 
 Here is a simple example to use the C API:
 
@@ -101,7 +100,6 @@ int main(int argc, const char* argv[]) {
 
     printf("Results of `sum`: %d\n", results_val[0].of.i32);
 
-    wasm_func_delete(sum_func);
     wasm_module_delete(module);
     wasm_extern_vec_delete(&exports);
     wasm_instance_delete(instance);
@@ -186,9 +184,9 @@ $ wasmer config --libs
 -L/Users/myuser/.wasmer/lib -lwasmer
 ```
 
-### `wasmer config --libs`
+### `wasmer config --cflags`
 
-Libraries needed to link against Wasmer components:
+Headers needed to build against Wasmer components:
 
 ```bash
 $ wasmer config --cflags

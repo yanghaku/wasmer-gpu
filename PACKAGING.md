@@ -13,10 +13,13 @@
   ```
 
 * `make install` respects `DESTDIR`, but `prefix` must be configured
-  with `WASMER_INSTALL_PREFIX`, e.g.:
+  with `WASMER_INSTALL_PREFIX`. Note that `DESTDIR` must include
+  `WASMER_INSTALL_PREFIX`, e.g.:
 
   ```sh
-  $ WASMER_INSTALL_PREFIX=/usr make install
+  export WASMER_INSTALL_PREFIX=/usr
+  make
+  DESTDIR=/tmp/staging/usr make install
   ```
 
 * In case you must build/install directly with `cargo`, make sure to
@@ -44,3 +47,9 @@
   * `libwasmer-static`, containing `libwasmer.a`.
 
 The Wasmer distro packaging story is still in its infancy, so feedback is very welcome.
+
+## Miscellaneous: binfmt_misc
+
+Wasmer can be registered as a binfmt interpreter for wasm binaries.
+An example systemd [.service](./scripts/wasmer-binfmt.service.example) is included here.
+Please consider statically linking the wasmer binary so that this capability is also available in mount namespaces.

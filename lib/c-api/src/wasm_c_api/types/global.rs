@@ -3,17 +3,17 @@ use super::{
     wasm_valtype_t, WasmExternType,
 };
 use std::convert::TryInto;
-use wasmer::{ExternType, GlobalType};
+use wasmer_api::{ExternType, GlobalType};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WasmGlobalType {
     pub(crate) global_type: GlobalType,
-    content: Box<wasm_valtype_t>,
+    content: wasm_valtype_t,
 }
 
 impl WasmGlobalType {
     pub(crate) fn new(global_type: GlobalType) -> Self {
-        let content = Box::new(global_type.ty.into());
+        let content = global_type.ty.into();
 
         Self {
             global_type,
@@ -79,5 +79,5 @@ pub unsafe extern "C" fn wasm_globaltype_mutability(
 pub unsafe extern "C" fn wasm_globaltype_content(
     global_type: &wasm_globaltype_t,
 ) -> &wasm_valtype_t {
-    global_type.inner().content.as_ref()
+    &global_type.inner().content
 }

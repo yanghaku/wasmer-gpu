@@ -4,7 +4,7 @@ use super::super::value::wasm_val_t;
 use super::CApiExternTag;
 use crate::error::update_last_error;
 use std::convert::TryInto;
-use wasmer::{Global, Val};
+use wasmer_api::{Global, Val};
 
 #[allow(non_camel_case_types)]
 #[repr(C)]
@@ -48,7 +48,6 @@ pub unsafe extern "C" fn wasm_global_new(
 #[no_mangle]
 pub unsafe extern "C" fn wasm_global_delete(_global: Option<Box<wasm_global_t>>) {}
 
-// TODO: figure out if these should be deep or shallow copies
 #[no_mangle]
 pub unsafe extern "C" fn wasm_global_copy(global: &wasm_global_t) -> Box<wasm_global_t> {
     // do shallow copy

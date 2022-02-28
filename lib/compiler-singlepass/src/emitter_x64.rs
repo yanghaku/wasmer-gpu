@@ -1,27 +1,30 @@
+use crate::common_decl::Size;
+use crate::location::Location as AbstractLocation;
+pub use crate::location::Multiplier;
+pub use crate::machine::{Label, Offset};
 pub use crate::x64_decl::{GPR, XMM};
 use dynasm::dynasm;
-use dynasmrt::{x64::Assembler, AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi};
+use dynasmrt::{
+    x64::X64Relocation, AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, VecAssembler,
+};
 
-/// Dynasm proc-macro checks for an `.arch` expression in a source file to
-/// determine the architecture it should use.
-fn _dummy(_a: &Assembler) {
-    dynasm!(
-        _a
-        ; .arch x64
-    );
+type Assembler = VecAssembler<X64Relocation>;
+
+/// Force `dynasm!` to use the correct arch (x64) when cross-compiling.
+/// `dynasm!` proc-macro tries to auto-detect it by default by looking at the
+/// `target_arch`, but it sees the `target_arch` of the proc-macro itself, which
+/// is always equal to host, even when cross-compiling.
+macro_rules! dynasm {
+    ($a:expr ; $($tt:tt)*) => {
+        dynasm::dynasm!(
+            $a
+            ; .arch x64
+            ; $($tt)*
+        )
+    };
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Location {
-    Imm8(u8),
-    Imm32(u32),
-    Imm64(u64),
-    // Imm128(u128),
-    GPR(GPR),
-    XMM(XMM),
-    Memory(GPR, i32),
-    MemoryAddTriple(GPR, GPR, i32),
-}
+pub type Location = AbstractLocation<GPR, XMM>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Condition {
@@ -40,14 +43,6 @@ pub enum Condition {
     Carry,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Size {
-    S8,
-    S16,
-    S32,
-    S64,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub enum XMMOrMemory {
@@ -62,12 +57,9 @@ pub enum GPROrMemory {
     Memory(GPR, i32),
 }
 
-pub trait Emitter {
-    type Label;
-    type Offset;
-
-    fn get_label(&mut self) -> Self::Label;
-    fn get_offset(&self) -> Self::Offset;
+pub trait EmitterX64 {
+    fn get_label(&mut self) -> Label;
+    fn get_offset(&self) -> Offset;
     fn get_jmp_instr_size(&self) -> u8;
 
     fn finalize_function(&mut self) {}
@@ -75,7 +67,7 @@ pub trait Emitter {
     fn emit_u64(&mut self, x: u64);
     fn emit_bytes(&mut self, bytes: &[u8]);
 
-    fn emit_label(&mut self, label: Self::Label);
+    fn emit_label(&mut self, label: Label);
 
     fn emit_nop(&mut self);
 
@@ -85,11 +77,11 @@ pub trait Emitter {
 
     fn emit_mov(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_lea(&mut self, sz: Size, src: Location, dst: Location);
-    fn emit_lea_label(&mut self, label: Self::Label, dst: Location);
+    fn emit_lea_label(&mut self, label: Label, dst: Location);
     fn emit_cdq(&mut self);
     fn emit_cqo(&mut self);
     fn emit_xor(&mut self, sz: Size, src: Location, dst: Location);
-    fn emit_jmp(&mut self, condition: Condition, label: Self::Label);
+    fn emit_jmp(&mut self, condition: Condition, label: Label);
     fn emit_jmp_location(&mut self, loc: Location);
     fn emit_set(&mut self, condition: Condition, dst: GPR);
     fn emit_push(&mut self, sz: Size, src: Location);
@@ -108,6 +100,7 @@ pub trait Emitter {
     fn emit_rol(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_ror(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_and(&mut self, sz: Size, src: Location, dst: Location);
+    fn emit_test(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_or(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_bsr(&mut self, sz: Size, src: Location, dst: Location);
     fn emit_bsf(&mut self, sz: Size, src: Location, dst: Location);
@@ -202,7 +195,7 @@ pub trait Emitter {
 
     fn emit_ud2(&mut self);
     fn emit_ret(&mut self);
-    fn emit_call_label(&mut self, label: Self::Label);
+    fn emit_call_label(&mut self, label: Label);
     fn emit_call_location(&mut self, loc: Location);
 
     fn emit_call_register(&mut self, reg: GPR);
@@ -474,7 +467,7 @@ macro_rules! binop_shift {
 
 macro_rules! jmp_op {
     ($ins:ident, $assembler:tt, $label:ident) => {
-        dynasm!($assembler ; $ins =>$label);
+        dynasm!($assembler ; $ins =>$label)
     }
 }
 
@@ -625,10 +618,7 @@ macro_rules! avx_round_fn {
     }
 }
 
-impl Emitter for Assembler {
-    type Label = DynamicLabel;
-    type Offset = AssemblyOffset;
-
+impl EmitterX64 for Assembler {
     fn get_label(&mut self) -> DynamicLabel {
         self.new_dynamic_label()
     }
@@ -663,7 +653,7 @@ impl Emitter for Assembler {
         }
     }
 
-    fn emit_label(&mut self, label: Self::Label) {
+    fn emit_label(&mut self, label: Label) {
         dynasm!(self ; => label);
     }
 
@@ -755,32 +745,32 @@ impl Emitter for Assembler {
                     (Size::S32, Location::Imm64(src), Location::Memory(dst, disp)) => {
                         dynasm!(self ; mov DWORD [Rq(dst as u8) + disp], src as i32);
                     }
-                    (Size::S32, Location::GPR(src), Location::XMM(dst)) => {
+                    (Size::S32, Location::GPR(src), Location::SIMD(dst)) => {
                         dynasm!(self ; movd Rx(dst as u8), Rd(src as u8));
                     }
-                    (Size::S32, Location::XMM(src), Location::GPR(dst)) => {
+                    (Size::S32, Location::SIMD(src), Location::GPR(dst)) => {
                         dynasm!(self ; movd Rd(dst as u8), Rx(src as u8));
                     }
-                    (Size::S32, Location::Memory(src, disp), Location::XMM(dst)) => {
+                    (Size::S32, Location::Memory(src, disp), Location::SIMD(dst)) => {
                         dynasm!(self ; movd Rx(dst as u8), [Rq(src as u8) + disp]);
                     }
-                    (Size::S32, Location::XMM(src), Location::Memory(dst, disp)) => {
+                    (Size::S32, Location::SIMD(src), Location::Memory(dst, disp)) => {
                         dynasm!(self ; movd [Rq(dst as u8) + disp], Rx(src as u8));
                     }
 
-                    (Size::S64, Location::GPR(src), Location::XMM(dst)) => {
+                    (Size::S64, Location::GPR(src), Location::SIMD(dst)) => {
                         dynasm!(self ; movq Rx(dst as u8), Rq(src as u8));
                     }
-                    (Size::S64, Location::XMM(src), Location::GPR(dst)) => {
+                    (Size::S64, Location::SIMD(src), Location::GPR(dst)) => {
                         dynasm!(self ; movq Rq(dst as u8), Rx(src as u8));
                     }
-                    (Size::S64, Location::Memory(src, disp), Location::XMM(dst)) => {
+                    (Size::S64, Location::Memory(src, disp), Location::SIMD(dst)) => {
                         dynasm!(self ; movq Rx(dst as u8), [Rq(src as u8) + disp]);
                     }
-                    (Size::S64, Location::XMM(src), Location::Memory(dst, disp)) => {
+                    (Size::S64, Location::SIMD(src), Location::Memory(dst, disp)) => {
                         dynasm!(self ; movq [Rq(dst as u8) + disp], Rx(src as u8));
                     }
-                    (_, Location::XMM(src), Location::XMM(dst)) => {
+                    (_, Location::SIMD(src), Location::SIMD(dst)) => {
                         dynasm!(self ; movq Rx(dst as u8), Rx(src as u8));
                     }
 
@@ -797,16 +787,44 @@ impl Emitter for Assembler {
             (Size::S64, Location::Memory(src, disp), Location::GPR(dst)) => {
                 dynasm!(self ; lea Rq(dst as u8), [Rq(src as u8) + disp]);
             }
-            (Size::S32, Location::MemoryAddTriple(src1, src2, disp), Location::GPR(dst)) => {
-                dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) + disp]);
+            (Size::S32, Location::Memory2(src1, src2, mult, disp), Location::GPR(dst)) => {
+                match mult {
+                    Multiplier::Zero => dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + disp]),
+                    Multiplier::One => {
+                        dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) + disp])
+                    }
+                    Multiplier::Two => {
+                        dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 2 + disp])
+                    }
+                    Multiplier::Four => {
+                        dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 4 + disp])
+                    }
+                    Multiplier::Height => {
+                        dynasm!(self ; lea Rd(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 8 + disp])
+                    }
+                };
             }
-            (Size::S64, Location::MemoryAddTriple(src1, src2, disp), Location::GPR(dst)) => {
-                dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) + disp]);
+            (Size::S64, Location::Memory2(src1, src2, mult, disp), Location::GPR(dst)) => {
+                match mult {
+                    Multiplier::Zero => dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + disp]),
+                    Multiplier::One => {
+                        dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) + disp])
+                    }
+                    Multiplier::Two => {
+                        dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 2 + disp])
+                    }
+                    Multiplier::Four => {
+                        dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 4 + disp])
+                    }
+                    Multiplier::Height => {
+                        dynasm!(self ; lea Rq(dst as u8), [Rq(src1 as u8) + Rq(src2 as u8) * 8 + disp])
+                    }
+                };
             }
             _ => panic!("singlepass can't emit LEA {:?} {:?} {:?}", sz, src, dst),
         }
     }
-    fn emit_lea_label(&mut self, label: Self::Label, dst: Location) {
+    fn emit_lea_label(&mut self, label: Label, dst: Location) {
         match dst {
             Location::GPR(x) => {
                 dynasm!(self ; lea Rq(x as u8), [=>label]);
@@ -825,7 +843,7 @@ impl Emitter for Assembler {
             panic!("singlepass can't emit XOR {:?} {:?} {:?}", sz, src, dst)
         });
     }
-    fn emit_jmp(&mut self, condition: Condition, label: Self::Label) {
+    fn emit_jmp(&mut self, condition: Condition, label: Label) {
         match condition {
             Condition::None => jmp_op!(jmp, self, label),
             Condition::Above => jmp_op!(ja, self, label),
@@ -996,6 +1014,11 @@ impl Emitter for Assembler {
     fn emit_and(&mut self, sz: Size, src: Location, dst: Location) {
         binop_all_nofp!(and, self, sz, src, dst, {
             panic!("singlepass can't emit AND {:?} {:?} {:?}", sz, src, dst)
+        });
+    }
+    fn emit_test(&mut self, sz: Size, src: Location, dst: Location) {
+        binop_all_nofp!(test, self, sz, src, dst, {
+            panic!("singlepass can't emit TEST {:?} {:?} {:?}", sz, src, dst)
         });
     }
     fn emit_or(&mut self, sz: Size, src: Location, dst: Location) {
@@ -1384,7 +1407,7 @@ impl Emitter for Assembler {
         dynasm!(self ; ret);
     }
 
-    fn emit_call_label(&mut self, label: Self::Label) {
+    fn emit_call_label(&mut self, label: Label) {
         dynasm!(self ; call =>label);
     }
     fn emit_call_location(&mut self, loc: Location) {
@@ -1400,7 +1423,7 @@ impl Emitter for Assembler {
     }
 
     fn emit_bkpt(&mut self) {
-        dynasm!(self ; int 0x3);
+        dynasm!(self ; int3);
     }
 
     fn emit_host_redirection(&mut self, target: GPR) {

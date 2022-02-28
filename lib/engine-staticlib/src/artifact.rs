@@ -3,18 +3,23 @@
 
 use crate::engine::{StaticlibEngine, StaticlibEngineInner};
 use crate::serialize::{ModuleMetadata, ModuleMetadataSymbolRegistry};
+use enumset::EnumSet;
 use loupe::MemoryUsage;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::mem;
 use std::sync::Arc;
-use wasmer_compiler::{CompileError, Features, OperatingSystem, SymbolRegistry, Triple};
+use wasmer_compiler::{
+    CompileError, CpuFeature, Features, OperatingSystem, SymbolRegistry, Triple,
+};
 #[cfg(feature = "compiler")]
 use wasmer_compiler::{
     CompileModuleInfo, Compiler, FunctionBodyData, ModuleEnvironment, ModuleMiddlewareChain,
     ModuleTranslationState,
 };
-use wasmer_engine::{Artifact, DeserializeError, InstantiationError, SerializeError};
+use wasmer_engine::{
+    Artifact, DeserializeError, InstantiationError, MetadataHeader, SerializeError,
+};
 #[cfg(feature = "compiler")]
 use wasmer_engine::{Engine, Tunables};
 #[cfg(feature = "compiler")]
@@ -24,11 +29,11 @@ use wasmer_types::entity::{BoxedSlice, PrimaryMap};
 #[cfg(feature = "compiler")]
 use wasmer_types::DataInitializer;
 use wasmer_types::{
-    FunctionIndex, LocalFunctionIndex, MemoryIndex, OwnedDataInitializer, SignatureIndex,
-    TableIndex,
+    FunctionIndex, LocalFunctionIndex, MemoryIndex, ModuleInfo, OwnedDataInitializer,
+    SignatureIndex, TableIndex,
 };
 use wasmer_vm::{
-    FuncDataRegistry, FunctionBodyPtr, MemoryStyle, ModuleInfo, TableStyle, VMSharedSignatureIndex,
+    FuncDataRegistry, FunctionBodyPtr, MemoryStyle, TableStyle, VMSharedSignatureIndex,
     VMTrampoline,
 };
 
@@ -46,6 +51,7 @@ pub struct StaticlibArtifact {
     /// Length of the serialized metadata
     metadata_length: usize,
     symbol_registry: ModuleMetadataSymbolRegistry,
+    is_compiled: bool,
 }
 
 #[allow(dead_code)]
@@ -79,7 +85,7 @@ impl StaticlibArtifact {
     /// target system.
     pub fn is_deserializable(bytes: &[u8]) -> bool {
         cfg_if::cfg_if! {
-            if #[cfg(all(target_pointer_width = "64", target_os="macos"))] {
+            if #[cfg(all(target_pointer_width = "64", target_vendor="apple"))] {
                 bytes.starts_with(Self::MAGIC_HEADER_MH_CIGAM_64)
             }
             else if #[cfg(all(target_pointer_width = "64", target_os="linux"))] {
@@ -181,6 +187,7 @@ impl StaticlibArtifact {
             prefix: engine_inner.get_prefix(&data),
             data_initializers,
             function_body_lengths,
+            cpu_features: target.cpu_features().as_u64(),
         };
 
         /*
@@ -201,10 +208,8 @@ impl StaticlibArtifact {
          */
 
         let serialized_data = bincode::serialize(&metadata).map_err(to_compile_error)?;
-        let mut metadata_binary = vec![0; 10];
-        let mut writable = &mut metadata_binary[..];
-        leb128::write::unsigned(&mut writable, serialized_data.len() as u64)
-            .expect("Should write number");
+        let mut metadata_binary = vec![];
+        metadata_binary.extend(MetadataHeader::new(serialized_data.len()));
         metadata_binary.extend(serialized_data);
         let metadata_length = metadata_binary.len();
 
@@ -295,6 +300,7 @@ impl StaticlibArtifact {
             func_data_registry: engine_inner.func_data().clone(),
             metadata_length,
             symbol_registry,
+            is_compiled: true,
         })
     }
 
@@ -315,15 +321,15 @@ impl StaticlibArtifact {
         engine: &StaticlibEngine,
         bytes: &[u8],
     ) -> Result<Self, DeserializeError> {
-        let mut reader = bytes;
-        let data_len = leb128::read::unsigned(&mut reader).unwrap() as usize;
+        let metadata_len = MetadataHeader::parse(bytes)?;
 
-        let metadata: ModuleMetadata = bincode::deserialize(&bytes[10..(data_len + 10)]).unwrap();
+        let metadata: ModuleMetadata =
+            bincode::deserialize(&bytes[MetadataHeader::LEN..][..metadata_len]).unwrap();
 
         const WORD_SIZE: usize = mem::size_of::<usize>();
         let mut byte_buffer = [0u8; WORD_SIZE];
 
-        let mut cur_offset = data_len + 10;
+        let mut cur_offset = MetadataHeader::LEN + metadata_len;
         byte_buffer[0..WORD_SIZE].clone_from_slice(&bytes[cur_offset..(cur_offset + WORD_SIZE)]);
         cur_offset += WORD_SIZE;
 
@@ -415,6 +421,7 @@ impl StaticlibArtifact {
             func_data_registry,
             metadata_length: 0,
             symbol_registry,
+            is_compiled: false,
         })
     }
 
@@ -450,6 +457,10 @@ impl Artifact for StaticlibArtifact {
         &self.metadata.compile_info.features
     }
 
+    fn cpu_features(&self) -> EnumSet<CpuFeature> {
+        EnumSet::from_u64(self.metadata.cpu_features)
+    }
+
     fn data_initializers(&self) -> &[OwnedDataInitializer] {
         &*self.metadata.data_initializers
     }
@@ -483,6 +494,12 @@ impl Artifact for StaticlibArtifact {
     }
 
     fn preinstantiate(&self) -> Result<(), InstantiationError> {
+        if self.is_compiled {
+            panic!(
+                "a module built with the staticlib engine must be linked \
+                into the current executable"
+            );
+        }
         Ok(())
     }
 

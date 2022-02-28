@@ -21,6 +21,7 @@ use gimli::write::{Address, EhFrame, FrameTable};
 use loupe::MemoryUsage;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use std::sync::Arc;
+use target_lexicon::{Architecture, OperatingSystem};
 use wasmer_compiler::CompileError;
 use wasmer_compiler::{CallingConvention, ModuleTranslationState, Target};
 use wasmer_compiler::{
@@ -29,8 +30,13 @@ use wasmer_compiler::{
     FunctionBodyData, MiddlewareBinaryReader, ModuleMiddleware, ModuleMiddlewareChain,
     SectionIndex,
 };
+use wasmer_compiler::{
+    CustomSection, CustomSectionProtection, Relocation, RelocationKind, RelocationTarget,
+    SectionBody,
+};
 use wasmer_types::entity::{EntityRef, PrimaryMap};
 use wasmer_types::{FunctionIndex, LocalFunctionIndex, SignatureIndex};
+use wasmer_vm::libcalls::LibCall;
 
 /// A compiler that compiles a WebAssembly module with Cranelift, translating the Wasm to Cranelift IR,
 /// optimizing it and then translating to assembly.
@@ -85,14 +91,13 @@ impl Compiler for CraneliftCompiler {
             // FDEs will cause some issues in Linux.
             None
         } else {
-            use std::sync::Mutex;
             match target.triple().default_calling_convention() {
                 Ok(CallingConvention::SystemV) => {
                     match isa.create_systemv_cie() {
                         Some(cie) => {
                             let mut dwarf_frametable = FrameTable::default();
                             let cie_id = dwarf_frametable.add_cie(cie);
-                            Some((Arc::new(Mutex::new(dwarf_frametable)), cie_id))
+                            Some((dwarf_frametable, cie_id))
                         }
                         // Even though we are in a SystemV system, Cranelift doesn't support it
                         None => None,
@@ -102,7 +107,38 @@ impl Compiler for CraneliftCompiler {
             }
         };
 
-        let functions = function_body_inputs
+        let mut custom_sections = PrimaryMap::new();
+
+        let probestack_trampoline_relocation_target = if target.triple().operating_system
+            == OperatingSystem::Linux
+            && target.triple().architecture == Architecture::X86_64
+        {
+            let probestack_trampoline = CustomSection {
+                protection: CustomSectionProtection::ReadExecute,
+                // We create a jump to an absolute 64bits address
+                // with an indrect jump immediatly followed but the absolute address
+                // JMP [IP+0]   FF 25 00 00 00 00
+                // 64bits ADDR  00 00 00 00 00 00 00 00 preset to 0 until the relocation takes place
+                bytes: SectionBody::new_with_vec(vec![
+                    0xff, 0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00,
+                ]),
+                relocations: vec![Relocation {
+                    kind: RelocationKind::Abs8,
+                    reloc_target: RelocationTarget::LibCall(LibCall::Probestack),
+                    // 6 is the size of the jmp instruction. The relocated address must follow
+                    offset: 6,
+                    addend: 0,
+                }],
+            };
+            custom_sections.push(probestack_trampoline);
+
+            Some(SectionIndex::new(custom_sections.len() - 1))
+        } else {
+            None
+        };
+
+        let (functions, fdes): (Vec<CompiledFunction>, Vec<_>) = function_body_inputs
             .iter()
             .collect::<Vec<(LocalFunctionIndex, &FunctionBodyData<'_>)>>()
             .par_iter()
@@ -138,7 +174,8 @@ impl Compiler for CraneliftCompiler {
                 )?;
 
                 let mut code_buf: Vec<u8> = Vec::new();
-                let mut reloc_sink = RelocSink::new(&module, func_index);
+                let mut reloc_sink =
+                    RelocSink::new(&module, func_index, probestack_trampoline_relocation_target);
                 let mut trap_sink = TrapSink::new();
                 let mut stackmap_sink = binemit::NullStackMapSink {};
                 context
@@ -153,31 +190,31 @@ impl Compiler for CraneliftCompiler {
                         CompileError::Codegen(pretty_error(&context.func, Some(&*isa), error))
                     })?;
 
-                let unwind_info = match compiled_function_unwind_info(&*isa, &context)? {
+                let (unwind_info, fde) = match compiled_function_unwind_info(&*isa, &context)? {
                     #[cfg(feature = "unwind")]
                     CraneliftUnwindInfo::FDE(fde) => {
-                        if let Some((dwarf_frametable, cie_id)) = &dwarf_frametable {
-                            dwarf_frametable
-                                .lock()
-                                .expect("Can't write into DWARF frametable")
-                                .add_fde(
-                                    *cie_id,
-                                    fde.to_fde(Address::Symbol {
-                                        // The symbol is the kind of relocation.
-                                        // "0" is used for functions
-                                        symbol: WriterRelocate::FUNCTION_SYMBOL,
-                                        // We use the addend as a way to specify the
-                                        // function index
-                                        addend: i.index() as _,
-                                    }),
-                                );
+                        if dwarf_frametable.is_some() {
+                            let fde = fde.to_fde(Address::Symbol {
+                                // The symbol is the kind of relocation.
+                                // "0" is used for functions
+                                symbol: WriterRelocate::FUNCTION_SYMBOL,
+                                // We use the addend as a way to specify the
+                                // function index
+                                addend: i.index() as _,
+                            });
                             // The unwind information is inserted into the dwarf section
-                            Some(CompiledFunctionUnwindInfo::Dwarf)
+                            (Some(CompiledFunctionUnwindInfo::Dwarf), Some(fde))
                         } else {
-                            None
+                            (None, None)
                         }
                     }
-                    other => other.maybe_into_to_windows_unwind(),
+                    #[cfg(feature = "unwind")]
+                    other => (other.maybe_into_to_windows_unwind(), None),
+
+                    // This is a bit hacky, but necessary since gimli is not
+                    // available when the "unwind" feature is disabled.
+                    #[cfg(not(feature = "unwind"))]
+                    other => (other.maybe_into_to_windows_unwind(), None::<()>),
                 };
 
                 let range = reader.range();
@@ -186,44 +223,44 @@ impl Compiler for CraneliftCompiler {
                 // We transform the Cranelift JumpTable's into compiler JumpTables
                 let func_jt_offsets = transform_jump_table(context.func.jt_offsets);
 
-                Ok(CompiledFunction {
-                    body: FunctionBody {
-                        body: code_buf,
-                        unwind_info,
+                Ok((
+                    CompiledFunction {
+                        body: FunctionBody {
+                            body: code_buf,
+                            unwind_info,
+                        },
+                        jt_offsets: func_jt_offsets,
+                        relocations: reloc_sink.func_relocs,
+                        frame_info: CompiledFunctionFrameInfo {
+                            address_map,
+                            traps: trap_sink.traps,
+                        },
                     },
-                    jt_offsets: func_jt_offsets,
-                    relocations: reloc_sink.func_relocs,
-                    frame_info: CompiledFunctionFrameInfo {
-                        address_map,
-                        traps: trap_sink.traps,
-                    },
-                })
+                    fde,
+                ))
             })
             .collect::<Result<Vec<_>, CompileError>>()?
             .into_iter()
-            .collect::<PrimaryMap<LocalFunctionIndex, _>>();
+            .unzip();
 
         #[cfg(feature = "unwind")]
-        let (custom_sections, dwarf) = {
-            let mut custom_sections = PrimaryMap::new();
-            let dwarf = if let Some((dwarf_frametable, _cie_id)) = dwarf_frametable {
-                let mut eh_frame = EhFrame(WriterRelocate::new(target.triple().endianness().ok()));
-                dwarf_frametable
-                    .lock()
-                    .unwrap()
-                    .write_eh_frame(&mut eh_frame)
-                    .unwrap();
+        let dwarf = if let Some((mut dwarf_frametable, cie_id)) = dwarf_frametable {
+            for fde in fdes {
+                if let Some(fde) = fde {
+                    dwarf_frametable.add_fde(cie_id, fde);
+                }
+            }
+            let mut eh_frame = EhFrame(WriterRelocate::new(target.triple().endianness().ok()));
+            dwarf_frametable.write_eh_frame(&mut eh_frame).unwrap();
 
-                let eh_frame_section = eh_frame.0.into_section();
-                custom_sections.push(eh_frame_section);
-                Some(Dwarf::new(SectionIndex::new(0)))
-            } else {
-                None
-            };
-            (custom_sections, dwarf)
+            let eh_frame_section = eh_frame.0.into_section();
+            custom_sections.push(eh_frame_section);
+            Some(Dwarf::new(SectionIndex::new(custom_sections.len() - 1)))
+        } else {
+            None
         };
         #[cfg(not(feature = "unwind"))]
-        let (custom_sections, dwarf) = (PrimaryMap::new(), None);
+        let dwarf = None;
 
         // function call trampolines (only for local functions, by signature)
         let function_call_trampolines = module
@@ -253,7 +290,7 @@ impl Compiler for CraneliftCompiler {
             .collect::<PrimaryMap<FunctionIndex, FunctionBody>>();
 
         Ok(Compilation::new(
-            functions,
+            functions.into_iter().collect(),
             custom_sections,
             function_call_trampolines,
             dynamic_function_trampolines,

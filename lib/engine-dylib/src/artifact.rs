@@ -2,22 +2,26 @@
 //! to be done as separate steps.
 
 use crate::engine::{DylibEngine, DylibEngineInner};
-use crate::serialize::{ArchivedModuleMetadata, ModuleMetadata};
+use crate::serialize::ModuleMetadata;
+use crate::trampoline::{emit_trampolines, fill_trampoline_table, WASMER_TRAMPOLINES_SYMBOL};
+use enumset::EnumSet;
 use libloading::{Library, Symbol as LibrarySymbol};
 use loupe::MemoryUsage;
+use object::{write::CoffExportStyle, BinaryFormat};
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "compiler")]
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tempfile::NamedTempFile;
+use tracing::log::error;
 #[cfg(feature = "compiler")]
 use tracing::trace;
 use wasmer_compiler::{
-    CompileError, CompiledFunctionFrameInfo, Features, FunctionAddressMap, OperatingSystem, Symbol,
-    SymbolRegistry, Triple,
+    Architecture, CompileError, CompiledFunctionFrameInfo, CpuFeature, Features,
+    FunctionAddressMap, OperatingSystem, Symbol, SymbolRegistry, Triple,
 };
 #[cfg(feature = "compiler")]
 use wasmer_compiler::{
@@ -26,7 +30,7 @@ use wasmer_compiler::{
 };
 use wasmer_engine::{
     register_frame_info, Artifact, DeserializeError, FunctionExtent, GlobalFrameInfoRegistration,
-    InstantiationError, SerializeError,
+    InstantiationError, MetadataHeader, SerializeError,
 };
 #[cfg(feature = "compiler")]
 use wasmer_engine::{Engine, Tunables};
@@ -36,11 +40,11 @@ use wasmer_types::entity::{BoxedSlice, PrimaryMap};
 #[cfg(feature = "compiler")]
 use wasmer_types::DataInitializer;
 use wasmer_types::{
-    FunctionIndex, LocalFunctionIndex, MemoryIndex, OwnedDataInitializer, SignatureIndex,
-    TableIndex,
+    FunctionIndex, LocalFunctionIndex, MemoryIndex, ModuleInfo, OwnedDataInitializer,
+    SignatureIndex, TableIndex,
 };
 use wasmer_vm::{
-    FuncDataRegistry, FunctionBodyPtr, MemoryStyle, ModuleInfo, TableStyle, VMFunctionBody,
+    FuncDataRegistry, FunctionBodyPtr, MemoryStyle, TableStyle, VMFunctionBody,
     VMSharedSignatureIndex, VMTrampoline,
 };
 
@@ -48,6 +52,7 @@ use wasmer_vm::{
 #[derive(MemoryUsage)]
 pub struct DylibArtifact {
     dylib_path: PathBuf,
+    is_temporary: bool,
     metadata: ModuleMetadata,
     finished_functions: BoxedSlice<LocalFunctionIndex, FunctionBodyPtr>,
     #[loupe(skip)]
@@ -58,14 +63,24 @@ pub struct DylibArtifact {
     frame_info_registration: Mutex<Option<GlobalFrameInfoRegistration>>,
 }
 
+impl Drop for DylibArtifact {
+    fn drop(&mut self) {
+        if self.is_temporary {
+            if let Err(err) = std::fs::remove_file(&self.dylib_path) {
+                error!("cannot delete the temporary dylib artifact: {}", err);
+            }
+        }
+    }
+}
+
 fn to_compile_error(err: impl Error) -> CompileError {
-    CompileError::Codegen(format!("{}", err))
+    CompileError::Codegen(err.to_string())
 }
 
 const WASMER_METADATA_SYMBOL: &[u8] = b"WASMER_METADATA";
 
 impl DylibArtifact {
-    // Mach-O header in Mac
+    // Mach-O header in iOS/Mac
     #[allow(dead_code)]
     const MAGIC_HEADER_MH_CIGAM_64: &'static [u8] = &[207, 250, 237, 254];
 
@@ -87,7 +102,7 @@ impl DylibArtifact {
     /// system.
     pub fn is_deserializable(bytes: &[u8]) -> bool {
         cfg_if::cfg_if! {
-            if #[cfg(all(target_pointer_width = "64", target_os="macos"))] {
+            if #[cfg(all(target_pointer_width = "64", target_vendor="apple"))] {
                 bytes.starts_with(Self::MAGIC_HEADER_MH_CIGAM_64)
             }
             else if #[cfg(all(target_pointer_width = "64", target_os="linux"))] {
@@ -194,19 +209,21 @@ impl DylibArtifact {
             .map(|_function_body| 0u64)
             .collect::<PrimaryMap<LocalFunctionIndex, u64>>();
 
+        let function_frame_info = None;
+
         let mut metadata = ModuleMetadata {
             compile_info,
+            function_frame_info,
             prefix: engine_inner.get_prefix(&data),
             data_initializers,
             function_body_lengths,
+            cpu_features: target.cpu_features().as_u64(),
         };
 
         let serialized_data = metadata.serialize()?;
 
-        let mut metadata_binary = vec![0; 12];
-        let mut writable = &mut metadata_binary[..];
-        leb128::write::unsigned(&mut writable, serialized_data.len() as u64)
-            .expect("Should write number");
+        let mut metadata_binary = vec![];
+        metadata_binary.extend(MetadataHeader::new(serialized_data.len()));
         metadata_binary.extend(serialized_data);
 
         let (compile_info, symbol_registry) = metadata.split();
@@ -220,8 +237,31 @@ impl DylibArtifact {
             &metadata_binary,
         );
 
+        let mut extra_filepath = None;
         let filepath = match maybe_obj_bytes {
             Some(obj_bytes) => {
+                extra_filepath = {
+                    // Create a separate object file with the trampolines.
+                    let mut obj =
+                        get_object_for_target(&target_triple).map_err(to_compile_error)?;
+                    emit_trampolines(&mut obj, engine.target());
+                    if obj.format() == BinaryFormat::Coff {
+                        obj.add_coff_exports(CoffExportStyle::Gnu);
+                    }
+                    let file = tempfile::Builder::new()
+                        .prefix("wasmer_dylib_")
+                        .suffix(".o")
+                        .tempfile()
+                        .map_err(to_compile_error)?;
+
+                    // Re-open it.
+                    let (mut file, filepath) = file.keep().map_err(to_compile_error)?;
+                    let obj_bytes = obj.write().map_err(to_compile_error)?;
+                    file.write_all(&obj_bytes).map_err(to_compile_error)?;
+                    Some(filepath)
+                };
+
+                // Write the object file generated by the compiler.
                 let obj_bytes = obj_bytes?;
                 let file = tempfile::Builder::new()
                     .prefix("wasmer_dylib_")
@@ -231,7 +271,7 @@ impl DylibArtifact {
 
                 // Re-open it.
                 let (mut file, filepath) = file.keep().map_err(to_compile_error)?;
-                file.write(&obj_bytes).map_err(to_compile_error)?;
+                file.write_all(&obj_bytes).map_err(to_compile_error)?;
                 filepath
             }
             None => {
@@ -242,31 +282,40 @@ impl DylibArtifact {
                     function_body_inputs,
                 )?;
                 let mut obj = get_object_for_target(&target_triple).map_err(to_compile_error)?;
+                emit_trampolines(&mut obj, engine.target());
                 emit_data(
                     &mut obj,
                     WASMER_METADATA_SYMBOL,
                     &metadata_binary,
-                    std::mem::align_of::<ArchivedModuleMetadata>() as u64,
+                    MetadataHeader::ALIGN as u64,
                 )
                 .map_err(to_compile_error)?;
+
+                let frame_info = compilation.get_frame_info().clone();
+
                 emit_compilation(&mut obj, compilation, &symbol_registry, &target_triple)
                     .map_err(to_compile_error)?;
+                if obj.format() == BinaryFormat::Coff {
+                    obj.add_coff_exports(CoffExportStyle::Gnu);
+                }
                 let file = tempfile::Builder::new()
                     .prefix("wasmer_dylib_")
                     .suffix(".o")
                     .tempfile()
                     .map_err(to_compile_error)?;
 
+                metadata.function_frame_info = Some(frame_info);
+
                 // Re-open it.
                 let (mut file, filepath) = file.keep().map_err(to_compile_error)?;
                 let obj_bytes = obj.write().map_err(to_compile_error)?;
 
-                file.write(&obj_bytes).map_err(to_compile_error)?;
+                file.write_all(&obj_bytes).map_err(to_compile_error)?;
                 filepath
             }
         };
 
-        let shared_filepath = {
+        let output_filepath = {
             let suffix = format!(".{}", Self::get_default_extension(&target_triple));
             let shared_file = tempfile::Builder::new()
                 .prefix("wasmer_dylib_")
@@ -291,12 +340,45 @@ impl DylibArtifact {
             }
         };
 
+        // Set 'isysroot' clang flag if compiling to iOS target
+        let ios_compile_target = target_triple.operating_system == OperatingSystem::Ios;
+        let ios_sdk_flag = {
+            if ios_compile_target {
+                if target_triple.architecture == Architecture::X86_64 {
+                    "-isysroot/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+                } else {
+                    "-isysroot/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+                }
+            } else {
+                ""
+            }
+        };
+        let ios_sdk_lib = {
+            if ios_compile_target {
+                "-lSystem"
+            } else {
+                ""
+            }
+        };
+
+        // Get the location of the 'ld' linker for clang
+        let fuse_linker = {
+            let ld_install = which::which("ld");
+            if ios_compile_target && ld_install.is_ok() {
+                ld_install.unwrap().into_os_string().into_string().unwrap()
+            } else {
+                "lld".to_string()
+            }
+        };
+
         let cross_compiling_args: Vec<String> = if is_cross_compiling {
             vec![
                 format!("--target={}", target_triple_str),
-                "-fuse-ld=lld".to_string(),
+                format!("-fuse-ld={}", fuse_linker),
                 "-nodefaultlibs".to_string(),
                 "-nostdlib".to_string(),
+                ios_sdk_flag.to_string(),
+                ios_sdk_lib.to_string(),
             ]
         } else {
             // We are explicit on the target when the host system is
@@ -318,18 +400,36 @@ impl DylibArtifact {
             Triple::host().to_string(),
         );
 
+        let notext = match (target_triple.operating_system, target_triple.architecture) {
+            (OperatingSystem::Linux, Architecture::X86_64) => vec!["-Wl,-z,notext"],
+            _ => vec![],
+        };
+
         let linker = engine_inner.linker().executable();
         let output = Command::new(linker)
             .arg(&filepath)
+            .args(&extra_filepath)
             .arg("-o")
-            .arg(&shared_filepath)
+            .arg(&output_filepath)
             .args(&target_args)
             // .args(&wasmer_symbols)
             .arg("-shared")
+            .args(&notext)
             .args(&cross_compiling_args)
             .arg("-v")
             .output()
-            .map_err(to_compile_error)?;
+            .map_err(to_compile_error);
+
+        if fs::metadata(&filepath).is_ok() {
+            fs::remove_file(filepath).map_err(to_compile_error)?;
+        }
+        if let Some(filepath) = extra_filepath {
+            if fs::metadata(&filepath).is_ok() {
+                fs::remove_file(filepath).map_err(to_compile_error)?;
+            }
+        }
+
+        let output = output?;
 
         if !output.status.success() {
             return Err(CompileError::Codegen(format!(
@@ -338,13 +438,18 @@ impl DylibArtifact {
                 String::from_utf8_lossy(&output.stdout).trim_end()
             )));
         }
+
         trace!("gcc command result {:?}", output);
-        if is_cross_compiling {
-            Self::from_parts_crosscompiled(metadata, shared_filepath)
+
+        let mut artifact = if is_cross_compiling {
+            Self::from_parts_crosscompiled(metadata, output_filepath)
         } else {
-            let lib = unsafe { Library::new(&shared_filepath).map_err(to_compile_error)? };
-            Self::from_parts(&mut engine_inner, metadata, shared_filepath, lib)
-        }
+            let lib = unsafe { Library::new(&output_filepath).map_err(to_compile_error)? };
+            Self::from_parts(&mut engine_inner, metadata, output_filepath, lib)
+        }?;
+        artifact.is_temporary = true;
+
+        Ok(artifact)
     }
 
     /// Get the default extension when serializing this artifact
@@ -371,6 +476,7 @@ impl DylibArtifact {
         let signatures: PrimaryMap<SignatureIndex, VMSharedSignatureIndex> = PrimaryMap::new();
         Ok(Self {
             dylib_path,
+            is_temporary: false,
             metadata,
             finished_functions: finished_functions.into_boxed_slice(),
             finished_function_call_trampolines: finished_function_call_trampolines
@@ -390,6 +496,13 @@ impl DylibArtifact {
         dylib_path: PathBuf,
         lib: Library,
     ) -> Result<Self, CompileError> {
+        unsafe {
+            let trampolines_symbol: LibrarySymbol<usize> = lib
+                .get(WASMER_TRAMPOLINES_SYMBOL)
+                .expect("missing WASMER_TRAMPOLINES symbol");
+            fill_trampoline_table(trampolines_symbol.into_raw().into_raw() as *mut usize);
+        }
+
         let mut finished_functions: PrimaryMap<LocalFunctionIndex, FunctionBodyPtr> =
             PrimaryMap::new();
         for (function_local_index, _function_len) in metadata.function_body_lengths.iter() {
@@ -447,20 +560,6 @@ impl DylibArtifact {
             }
         }
 
-        // Leaving frame infos from now, as they are not yet used
-        // however they might be useful for the future.
-        // let frame_infos = compilation
-        //     .get_frame_info()
-        //     .values()
-        //     .map(|frame_info| SerializableFunctionFrameInfo::Processed(frame_info.clone()))
-        //     .collect::<PrimaryMap<LocalFunctionIndex, _>>();
-        // Self::from_parts(&mut engine_inner, lib, metadata, )
-        // let frame_info_registration = register_frame_info(
-        //     serializable.module.clone(),
-        //     &finished_functions,
-        //     serializable.compilation.function_frame_info.clone(),
-        // );
-
         // Compute indices into the shared signature table.
         let signatures = {
             metadata
@@ -476,6 +575,7 @@ impl DylibArtifact {
 
         Ok(Self {
             dylib_path,
+            is_temporary: false,
             metadata,
             finished_functions: finished_functions.into_boxed_slice(),
             finished_function_call_trampolines: finished_function_call_trampolines
@@ -517,7 +617,10 @@ impl DylibArtifact {
         file.write_all(&bytes)?;
         // We already checked for the header, so we don't need
         // to check again.
-        Self::deserialize_from_file_unchecked(&engine, &path)
+        let mut artifact = Self::deserialize_from_file_unchecked(&engine, &path)?;
+        artifact.is_temporary = true;
+
+        Ok(artifact)
     }
 
     /// Deserialize a `DylibArtifact` from a file path.
@@ -554,27 +657,19 @@ impl DylibArtifact {
             DeserializeError::CorruptedBinary(format!("Library loading failed: {}", e))
         })?;
         let shared_path: PathBuf = PathBuf::from(path);
-        // We use 12 + 1, as the length of the module will take 12 bytes
-        // (we construct it like that in `metadata_length`) and we also want
-        // to take the first element of the data to construct the slice from
-        // it.
-        let symbol: LibrarySymbol<*mut [u8; 12 + 1]> =
+        let metadata_symbol: LibrarySymbol<*mut [u8; MetadataHeader::LEN]> =
             lib.get(WASMER_METADATA_SYMBOL).map_err(|e| {
                 DeserializeError::CorruptedBinary(format!(
                     "The provided object file doesn't seem to be generated by Wasmer: {}",
                     e
                 ))
             })?;
-        use std::ops::Deref;
         use std::slice;
 
-        let size = &mut **symbol.deref();
-        let mut readable = &size[..];
-        let metadata_len = leb128::read::unsigned(&mut readable).map_err(|_e| {
-            DeserializeError::CorruptedBinary("Can't read metadata size".to_string())
-        })?;
+        let metadata = &**metadata_symbol;
+        let metadata_len = MetadataHeader::parse(metadata)?;
         let metadata_slice: &'static [u8] =
-            slice::from_raw_parts(&size[12] as *const u8, metadata_len as usize);
+            slice::from_raw_parts(metadata.as_ptr().add(MetadataHeader::LEN), metadata_len);
 
         let metadata = ModuleMetadata::deserialize(metadata_slice)?;
 
@@ -705,16 +800,20 @@ impl Artifact for DylibArtifact {
         // We sort them again, by key this time
         function_pointers.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
 
-        let frame_infos = function_pointers
-            .iter()
-            .map(|(_, extent)| CompiledFunctionFrameInfo {
-                traps: vec![],
-                address_map: FunctionAddressMap {
-                    body_len: extent.length,
-                    ..Default::default()
-                },
-            })
-            .collect::<PrimaryMap<LocalFunctionIndex, _>>();
+        let frame_infos = if self.metadata().function_frame_info.is_some() {
+            self.metadata().function_frame_info.clone().unwrap()
+        } else {
+            function_pointers
+                .iter()
+                .map(|(_, extent)| CompiledFunctionFrameInfo {
+                    traps: vec![],
+                    address_map: FunctionAddressMap {
+                        body_len: extent.length,
+                        ..Default::default()
+                    },
+                })
+                .collect::<PrimaryMap<LocalFunctionIndex, _>>()
+        };
 
         let finished_function_extents = function_pointers
             .into_iter()
@@ -731,6 +830,10 @@ impl Artifact for DylibArtifact {
 
     fn features(&self) -> &Features {
         &self.metadata.compile_info.features
+    }
+
+    fn cpu_features(&self) -> enumset::EnumSet<CpuFeature> {
+        EnumSet::from_u64(self.metadata.cpu_features)
     }
 
     fn data_initializers(&self) -> &[OwnedDataInitializer] {
@@ -772,5 +875,43 @@ impl Artifact for DylibArtifact {
     /// Serialize a `DylibArtifact`.
     fn serialize(&self) -> Result<Vec<u8>, SerializeError> {
         Ok(std::fs::read(&self.dylib_path)?)
+    }
+
+    /// Serialize a `DylibArtifact` to a portable file
+    #[cfg(feature = "compiler")]
+    fn serialize_to_file(&self, path: &Path) -> Result<(), SerializeError> {
+        let serialized = self.serialize()?;
+        std::fs::write(&path, serialized)?;
+
+        /*
+        When you write the artifact to a new file it still has the 'Mach-O Identifier'
+        of the original file, and so this can causes linker issues when adding
+        the new file to an XCode project.
+
+        The below code renames the ID of the file so that it references itself through
+        an @executable_path prefix. Basically it tells XCode to find this file
+        inside of the projects' list of 'linked executables'.
+
+        You need to be running MacOS for the following to actually work though.
+        */
+        let has_extension = path.extension().is_some();
+        if has_extension && path.extension().unwrap() == "dylib" {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            let parent_dir = path.parent().unwrap();
+            let absolute_path = std::fs::canonicalize(&parent_dir)
+                .unwrap()
+                .into_os_string()
+                .into_string()
+                .unwrap();
+
+            Command::new("install_name_tool")
+                .arg("-id")
+                .arg(format!("@executable_path/{}", &filename))
+                .arg(&filename)
+                .current_dir(&absolute_path)
+                .output()?;
+        }
+
+        Ok(())
     }
 }

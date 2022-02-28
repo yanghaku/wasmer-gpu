@@ -1,6 +1,7 @@
+#[cfg(feature = "compiler")]
+pub use super::unstable::engine::wasmer_is_compiler_available;
 pub use super::unstable::engine::{
-    wasm_config_set_features, wasm_config_set_target, wasmer_is_compiler_available,
-    wasmer_is_engine_available,
+    wasm_config_set_features, wasm_config_set_target, wasmer_is_engine_available,
 };
 use super::unstable::features::wasmer_features_t;
 #[cfg(feature = "middlewares")]
@@ -8,10 +9,10 @@ pub use super::unstable::middlewares::wasm_config_push_middleware;
 #[cfg(feature = "middlewares")]
 use super::unstable::middlewares::wasmer_middleware_t;
 use super::unstable::target_lexicon::wasmer_target_t;
-use crate::error::{update_last_error, CApiError};
+use crate::error::update_last_error;
 use cfg_if::cfg_if;
 use std::sync::Arc;
-use wasmer::Engine;
+use wasmer_api::Engine;
 #[cfg(feature = "dylib")]
 use wasmer_engine_dylib::Dylib;
 #[cfg(feature = "staticlib")]
@@ -286,7 +287,7 @@ pub struct wasm_engine_t {
 }
 
 #[cfg(feature = "compiler")]
-use wasmer::CompilerConfig;
+use wasmer_api::CompilerConfig;
 
 #[cfg(feature = "compiler")]
 fn get_default_compiler_config() -> Box<dyn CompilerConfig> {
@@ -432,13 +433,8 @@ pub extern "C" fn wasm_engine_new_with_config(
     config: Option<Box<wasm_config_t>>,
 ) -> Option<Box<wasm_engine_t>> {
     #[allow(dead_code)]
-    fn return_with_error<M>(msg: M) -> Option<Box<wasm_engine_t>>
-    where
-        M: ToString,
-    {
-        update_last_error(CApiError {
-            msg: msg.to_string(),
-        });
+    fn return_with_error(msg: &str) -> Option<Box<wasm_engine_t>> {
+        update_last_error(msg);
 
         return None;
     }

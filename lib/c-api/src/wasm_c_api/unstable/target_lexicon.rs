@@ -54,11 +54,10 @@
 //! ```
 
 use super::super::types::wasm_name_t;
-use crate::error::CApiError;
 use enumset::EnumSet;
 use std::slice;
 use std::str::{self, FromStr};
-use wasmer::{CpuFeature, Target, Triple};
+use wasmer_api::{CpuFeature, Target, Triple};
 
 /// Unstable non-standard Wasmer-specific API to represent a triple +
 /// CPU features pair.
@@ -153,7 +152,7 @@ pub unsafe extern "C" fn wasmer_triple_new(
     )));
 
     Some(Box::new(wasmer_triple_t {
-        inner: c_try!(Triple::from_str(triple).map_err(|e| CApiError { msg: e.to_string() })),
+        inner: c_try!(Triple::from_str(triple)),
     }))
 }
 

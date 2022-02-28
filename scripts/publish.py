@@ -21,7 +21,7 @@ except ImportError:
 
 
 # TODO: find this automatically
-target_version = "2.0.0"
+target_version = "2.2.0-rc2"
 
 # TODO: generate this by parsing toml files
 dep_graph = {
@@ -42,8 +42,9 @@ dep_graph = {
     "wasmer": set(["wasmer-vm", "wasmer-compiler-singlepass", "wasmer-compiler-cranelift",
                    "wasmer-compiler-llvm", "wasmer-compiler", "wasmer-engine", "wasmer-engine-universal",
                    "wasmer-engine-dylib", "wasmer-engine-staticlib", "wasmer-types", "wasmer-derive"]),
+    "wasmer-vfs": set([]),
     "wasmer-cache": set(["wasmer"]),
-    "wasmer-wasi": set(["wasmer", "wasmer-wasi-types"]),
+    "wasmer-wasi": set(["wasmer", "wasmer-wasi-types", "wasmer-vfs"]),
     "wasmer-wasi-types": set(["wasmer-types"]),
     "wasmer-wasi-experimental-io-devices": set(["wasmer-wasi"]),
     "wasmer-emscripten": set(["wasmer"]),
@@ -51,6 +52,12 @@ dep_graph = {
                          "wasmer-compiler-llvm", "wasmer-emscripten", "wasmer-engine", "wasmer-engine-universal",
                          "wasmer-engine-dylib", "wasmer-engine-staticlib", "wasmer-wasi", "wasmer-types"]),
     "wasmer-middlewares": set(["wasmer", "wasmer-types", "wasmer-vm"]),
+    "wasmer-wast": set(["wasmer", "wasmer-wasi", "wasmer-vfs"]),
+    "wasmer-cli": set(["wasmer", "wasmer-compiler", "wasmer-compiler-cranelift", "wasmer-compiler-singlepass",
+                       "wasmer-compiler-llvm", "wasmer-emscripten", "wasmer-engine", "wasmer-engine-universal",
+                       "wasmer-engine-dylib", "wasmer-engine-staticlib", "wasmer-vm", "wasmer-wasi",
+                       "wasmer-wasi-experimental-io-devices", "wasmer-wast", "wasmer-cache", "wasmer-types",
+                       "wasmer-vfs"]),
 }
 
 # where each crate is located in the `lib` directory
@@ -77,6 +84,9 @@ location = {
     "wasmer-wasi-experimental-io-devices": "wasi-experimental-io-devices",
     "wasmer-c-api": "c-api",
     "wasmer-middlewares": "middlewares",
+    "wasmer-vfs": "vfs",
+    "wasmer-cli": "cli",
+    "wasmer-wast": "../tests/lib/wast",
 }
 
 no_dry_run = False

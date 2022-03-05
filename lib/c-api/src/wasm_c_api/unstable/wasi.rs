@@ -18,9 +18,9 @@ use wasmer_wasi::{generate_import_object_from_env, get_wasi_version};
 #[allow(non_camel_case_types)]
 #[derive(Clone)]
 pub struct wasmer_named_extern_t {
-    pub(crate) module: owned_wasm_name_t,
-    pub(crate) name: owned_wasm_name_t,
-    pub(crate) r#extern: Box<wasm_extern_t>,
+    module: wasm_name_t,
+    name: wasm_name_t,
+    r#extern: Box<wasm_extern_t>,
 }
 
 wasm_declare_boxed_vec!(named_extern, wasmer);

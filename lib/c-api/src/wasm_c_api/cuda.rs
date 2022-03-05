@@ -5,7 +5,7 @@ use crate::wasm_c_api::store::wasm_store_t;
 use crate::wasm_c_api::module::wasm_module_t;
 use crate::wasm_c_api::externals::wasm_extern_vec_t;
 use crate::error::CApiError;
-use wasmer::{imports, ImportObject, Extern, Store, NamedResolver};
+use wasmer_api::{imports, ImportObject, Extern, Store, NamedResolver};
 use wasmer_wasi::{get_wasi_version, generate_import_object_from_env};
 use crate::wasm_c_api::unstable::wasi::wasmer_named_extern_t;
 use crate::wasm_c_api::unstable::wasi::wasmer_named_extern_vec_t;

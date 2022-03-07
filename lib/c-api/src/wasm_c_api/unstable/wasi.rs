@@ -3,9 +3,10 @@
 
 use super::super::{
     externals::wasm_extern_t, module::wasm_module_t, store::wasm_store_t, types::wasm_name_t,
-    wasi::wasi_env_t,
+    wasi::wasi_env_t, cuda::cuda_env_t,
 };
-use wasmer_api::Extern;
+use wasmer_api::{Extern, imports};
+use wasmer_cuda::add_cuda_to_import;
 use wasmer_wasi::{generate_import_object_from_env, get_wasi_version};
 
 /// Unstable non-standard type wrapping `wasm_extern_t` with the
@@ -184,6 +185,44 @@ fn wasi_get_unordered_imports_inner(
                     module,
                     name,
                     r#extern: Box::new(extern_inner.into()),
+                }))
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    Some(())
+}
+
+/// get the unordered imports for cuda
+#[no_mangle]
+pub unsafe extern "C" fn cuda_get_unordered_imports(
+    store: Option<&wasm_store_t>,
+    cuda_env: Option<&cuda_env_t>,
+    unordered_imports: &mut wasmer_named_extern_vec_t,
+) -> bool {
+    cuda_get_unordered_imports_inner(store, cuda_env, unordered_imports).is_some()
+}
+
+fn cuda_get_unordered_imports_inner(
+    store: Option<&wasm_store_t>,
+    cuda_env: Option<&cuda_env_t>,
+    unordered_imports: &mut wasmer_named_extern_vec_t,
+) -> Option<()> {
+    let store = store?;
+    let cuda_env = cuda_env?;
+
+    let store = &store.inner;
+
+    let mut import_object = imports! {};
+    add_cuda_to_import(store, cuda_env.inner.clone(), &mut import_object);
+
+    unordered_imports.set_buffer(
+        import_object.into_iter().map(
+            |((module, name), export)| {
+                Some(Box::new(wasmer_named_extern_t {
+                    module: module.into(),
+                    name: name.into(),
+                    r#extern: Box::new(Extern::from_vm_export(store, export).into()),
                 }))
             })
             .collect::<Vec<_>>(),

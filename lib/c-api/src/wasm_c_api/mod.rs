@@ -368,18 +368,21 @@ pub mod wat;
 ///
 /// # Example
 ///
-/// ```c
-/// #include <stdio.h>
-/// #include <string.h>
-/// #include <malloc.h>
-/// #include "wasmer.h"
+/// ```rust
+/// # use inline_c::assert_c;
+/// # fn main() {
+/// #    (assert_c! {
+/// # #include <stdio.h>
+/// # #include <string.h>
+/// # #include <malloc.h>
+/// # #include "wasmer.h"
 ///
-/// #define ERROR 0
-/// #define OK 1
-/// #define own
-/// #define WASMER_WASI_ENABLED
+/// # #define ERROR 0
+/// # #define OK 1
+/// # #define own
+/// # #define WASMER_WASI_ENABLED
 ///
-/// static const char *wasm_path = "/home/yb/code/wasmer/lib/wasmer-cuda/tests/test_bin/";
+/// static const char *wasm_path = "/home/yb/code/wasmer-gpu/lib/wasmer-cuda/tests/test_bin/";
 ///
 ///
 /// // Assert that a `wasm_name_t` equals something.
@@ -545,5 +548,8 @@ pub mod wat;
 ///     }
 ///     return 0;
 /// }
+/// #    })
+/// #    .success();
+/// # }
 /// ```
 pub mod cuda;

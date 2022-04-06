@@ -34,7 +34,6 @@ wasmer-engine-staticlib = { version = "=2.2.0", path = "../engine-staticlib", op
 wasmer-middlewares = { version = "=2.2.0", path = "../middlewares", optional = true }
 wasmer-wasi = { version = "=2.2.0", path = "../wasi", default-features = false, features = ["host-fs", "sys"], optional = true }
 wasmer-types = { version = "=2.2.0", path = "../types" }
-wasmer-cuda = { version = "0.1.0", path = "../wasmer-cuda"}
 enumset = "1.0"
 cfg-if = "1.0"
 lazy_static = "1.4"
@@ -43,6 +42,12 @@ serde = { version = "1", optional = true, features = ["derive"] }
 thiserror = "1"
 typetag = { version = "0.1", optional = true }
 paste = "1.0"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+wasmer-cuda = { version = "0.2.0-dev", path = "../wasmer-cuda", default-features = false, features = ["cuda-driver", "cuda-runtime", "cuda-102"] }
+
+[target.'cfg(not(target_arch = "aarch64"))'.dependencies]
+wasmer-cuda = { version = "0.2.0-dev", path = "../wasmer-cuda", default-features = false, features = ["cuda-driver", "cuda-runtime", "cuda-115"] }
 
 [dev-dependencies]
 field-offset = "0.3.3"

@@ -27,7 +27,7 @@ wasmer-cache = { version = "=2.2.0", path = "lib/cache", optional = true }
 wasmer-types = { version = "=2.2.0", path = "lib/types" }
 wasmer-middlewares = { version = "=2.2.0", path = "lib/middlewares", optional = true }
 cfg-if = "1.0"
-wasmer-cuda = { version = "0.1.0", path = "lib/wasmer-cuda", optional = true }
+wasmer-cuda = { version = "0.2.0-dev", path = "lib/wasmer-cuda", optional = true }
 
 [workspace]
 members = [

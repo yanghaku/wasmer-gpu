@@ -1,4 +1,4 @@
-use wasmer_cuda::env::CudaEnv;
+use wasmer_cuda::CudaEnv;
 use wasmer_cuda::add_cuda_to_import;
 use crate::wasm_c_api::wasi::wasi_env_t;
 use crate::wasm_c_api::store::wasm_store_t;
@@ -12,11 +12,11 @@ pub struct cuda_env_t {
     pub(super) inner: CudaEnv,
 }
 
-/// Create a new WASI environment
+/// Create a new CUDA environment
 #[no_mangle]
 pub extern "C" fn cuda_env_new() -> Option<Box<cuda_env_t>> {
     Some(Box::new(cuda_env_t {
-        inner: CudaEnv::new(),
+        inner: CudaEnv::default(),
     }))
 }
 

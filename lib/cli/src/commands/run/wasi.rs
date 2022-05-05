@@ -51,6 +51,10 @@ pub struct Wasi {
     /// Require WASI modules to only import 1 version of WASI.
     #[structopt(long = "deny-multiple-wasi-versions")]
     pub deny_multiple_wasi_versions: bool,
+
+    /// Enable cuda access
+    #[structopt(long = "enable-cuda")]
+    pub enable_cuda: bool,
 }
 
 #[allow(dead_code)]
@@ -59,7 +63,9 @@ impl Wasi {
     pub fn get_versions(module: &Module) -> Option<BTreeSet<WasiVersion>> {
         // Get the wasi version in strict mode, so no other imports are
         // allowed.
-        get_wasi_versions(&module, true)
+
+        // to support cuda, must use no-strict mode
+        get_wasi_versions(&module, false)
     }
 
     /// Checks if a given module has any WASI imports at all.
@@ -94,8 +100,17 @@ impl Wasi {
         }
 
         let mut wasi_env = wasi_state_builder.finalize()?;
-        let resolver = wasi_env.import_object_for_all_wasi_versions(&module)?;
-        let instance = Instance::new(&module, &resolver)?;
+        // let resolver = wasi_env.import_object_for_all_wasi_versions(&module)?;
+        // let instance = Instance::new(&module, &resolver)?;
+
+        let mut import_object = wasi_env.import_object(&module)?;
+
+        if self.enable_cuda {
+            let cuda_env = wasmer_cuda::CudaEnv::default();
+            cuda_env.add_to_import_object(&module, &mut import_object);
+        }
+
+        let instance = Instance::new(&module, &import_object)?;
         Ok(instance)
     }
 

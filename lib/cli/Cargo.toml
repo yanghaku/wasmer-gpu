@@ -40,7 +40,8 @@ wasmer-wasi-experimental-io-devices = { version = "=2.2.0", path = "../wasi-expe
 wasmer-wast = { version = "=2.2.0", path = "../../tests/lib/wast", optional = true }
 wasmer-cache = { version = "=2.2.0", path = "../cache", optional = true }
 wasmer-types = { version = "=2.2.0", path = "../types" }
-wasmer-vfs  = { version = "=2.2.0", path = "../vfs", default-features = false, features = ["host-fs"] }
+wasmer-vfs = { version = "=2.2.0", path = "../vfs", default-features = false, features = ["host-fs"] }
+wasmer-cuda = { version = "0.2.0-dev", path = "../wasmer-cuda", default-features = false, features = ["cuda-driver", "cuda-102"] }
 atty = "0.2"
 colored = "2.0"
 anyhow = "1.0"
@@ -121,3 +122,8 @@ headless-minimal = ["headless", "disable-all-logging", "wasi", "dylib", "univers
 # Deprecated features.
 jit = ["universal"]
 native = ["dylib"] 
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+lto = true
+codegen-units = 1
